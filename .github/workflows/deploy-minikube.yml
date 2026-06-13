@@ -125,6 +125,20 @@ jobs:
         run: |
           minikube addons enable ingress
 
+      - name: Wait for ingress controller and webhook
+        run: |
+          echo "Waiting for ingress-nginx controller to be ready..."
+          kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=120s || true
+          kubectl -n ingress-nginx wait --for=condition=available deployment/ingress-nginx-controller --timeout=120s || true
+          echo "Waiting for admission webhook endpoints..."
+          for i in $(seq 1 60); do
+            if kubectl -n ingress-nginx get endpoints ingress-nginx-controller-admission -o json | grep -q "addresses"; then
+              echo "Admission webhook endpoints ready"
+              break
+            fi
+            sleep 2
+          done
+
       - name: Configure deployment variables
         run: |
           TARGET_ENV="${{ github.event.inputs.environment }}"
