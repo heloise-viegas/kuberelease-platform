@@ -1,0 +1,43 @@
+apiVersion: v2
+name: commerce-api
+description: >
+  Helm chart for the Commerce API service — the primary HTTP API gateway
+  for the e-commerce platform. Handles product catalog, cart, and order
+  submission endpoints. Deployed across dev, staging, and production
+  via the KubeRelease Platform framework.
+
+# "application" for deployable services; "library" for shared template charts
+type: application
+
+# Chart schema version — increment on any template or values structural change
+version: 1.0.0
+
+# Application version — tracks the commerce-api container image release
+appVersion: "2.4.1"
+
+keywords:
+  - commerce
+  - api
+  - http
+  - nginx
+  - platform
+
+home: https://github.com/your-org/kuberelease-platform
+
+sources:
+  - https://github.com/your-org/kuberelease-platform
+
+maintainers:
+  - name: Platform Engineering
+    email: platform-eng@your-org.com
+    url: https://your-org.github.io/platform
+
+annotations:
+  # Semantic versioning policy: MAJOR.MINOR.PATCH
+  # MAJOR: breaking change to values schema (requires values file migration)
+  # MINOR: new optional values keys added
+  # PATCH: bug fix or non-breaking template improvement
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial chart release with full KubeRelease framework support
+  artifacthub.io/license: Apache-2.0

@@ -1,0 +1,96 @@
+# =============================================================================
+# commerce-api — Production Environment Overrides
+# =============================================================================
+# Production values are sized for peak traffic with headroom.
+# All resource requests are based on p99 profiling data from staging load tests.
+# Changes to this file require a PR review from at least one Platform Engineer
+# and one service owner.
+# =============================================================================
+
+replicaCount: 5
+
+image:
+  tag: latest
+  pullPolicy: Always
+
+namespace: commerce-prod
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/limit-rps: "500"
+    nginx.ingress.kubernetes.io/limit-connections: "200"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: commerce-api.your-org.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: commerce-api-prod-tls
+      hosts:
+        - commerce-api.your-org.com
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 1Gi
+
+hpa:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 75
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 2
+    maxUnavailable: 0
+
+config:
+  APP_ENV: "production"
+  LOG_LEVEL: "warn"
+  LOG_FORMAT: "json"
+  METRICS_ENABLED: "true"
+  CACHE_TTL_SECONDS: "300"
+  MAX_CONNECTIONS: "200"
+  REQUEST_TIMEOUT_MS: "5000"
+  CORS_ALLOWED_ORIGINS: "https://your-org.com"
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+  cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: commerce-api
+        topologyKey: kubernetes.io/hostname
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: commerce-api
+          topologyKey: topology.kubernetes.io/zone
+
+commonLabels:
+  app.kubernetes.io/part-of: commerce-platform
+  app.kubernetes.io/managed-by: helm
+  team: platform-engineering
+  environment: production
+  criticality: high

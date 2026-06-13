@@ -1,0 +1,58 @@
+# =============================================================================
+# commerce-api — Development Environment Overrides
+# =============================================================================
+# Applied on top of values.yaml for the dev cluster.
+# Keep resource allocations minimal — dev is for iteration, not load.
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  tag: dev
+
+namespace: commerce-dev
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: commerce-api.dev.your-org.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 2
+  targetCPUUtilizationPercentage: 80
+
+config:
+  APP_ENV: "development"
+  LOG_LEVEL: "debug"
+  LOG_FORMAT: "text"
+  METRICS_ENABLED: "false"
+  CACHE_TTL_SECONDS: "30"
+  MAX_CONNECTIONS: "10"
+  REQUEST_TIMEOUT_MS: "10000"
+  CORS_ALLOWED_ORIGINS: "*"
+
+podAnnotations:
+  prometheus.io/scrape: "false"
+
+commonLabels:
+  app.kubernetes.io/part-of: commerce-platform
+  app.kubernetes.io/managed-by: helm
+  team: platform-engineering
+  environment: development

@@ -1,0 +1,82 @@
+===========================================================================
+ commerce-api — Release Notes
+===========================================================================
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Values.namespace }}
+Chart:     {{ .Chart.Name }}-{{ .Chart.Version }}
+App:       {{ .Chart.AppVersion }}
+Image:     {{ include "commerce-api.image" . }}
+
+---------------------------------------------------------------------------
+ Deployment Status
+---------------------------------------------------------------------------
+
+Check rollout status:
+
+  kubectl rollout status deployment/{{ include "commerce-api.fullname" . }} \
+    --namespace {{ .Values.namespace }}
+
+Inspect running pods:
+
+  kubectl get pods \
+    --namespace {{ .Values.namespace }} \
+    --selector app.kubernetes.io/instance={{ .Release.Name }}
+
+---------------------------------------------------------------------------
+ Service Access
+---------------------------------------------------------------------------
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  {{- if .tls }}
+  https://{{ .host }}
+  {{- else }}
+  http://{{ .host }}
+  {{- end }}
+{{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+
+  NOTE: Service type is LoadBalancer. Retrieve the external IP with:
+
+  kubectl get service {{ include "commerce-api.fullname" . }} \
+    --namespace {{ .Values.namespace }} \
+    --output jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+{{- else }}
+
+  Service is ClusterIP. Forward locally for testing:
+
+  kubectl port-forward service/{{ include "commerce-api.fullname" . }} \
+    8080:{{ .Values.service.port }} \
+    --namespace {{ .Values.namespace }}
+
+  Then open: http://localhost:8080
+
+{{- end }}
+
+---------------------------------------------------------------------------
+ HPA Status
+---------------------------------------------------------------------------
+
+{{- if .Values.hpa.enabled }}
+  HPA is enabled (min: {{ .Values.hpa.minReplicas }}, max: {{ .Values.hpa.maxReplicas }}).
+  Current scaling status:
+
+  kubectl get hpa {{ include "commerce-api.fullname" . }} \
+    --namespace {{ .Values.namespace }}
+{{- else }}
+  HPA is disabled. Replicas fixed at: {{ .Values.replicaCount }}
+{{- end }}
+
+---------------------------------------------------------------------------
+ Release History
+---------------------------------------------------------------------------
+
+  helm history {{ .Release.Name }} --namespace {{ .Values.namespace }}
+
+To roll back to a prior revision:
+
+  helm rollback {{ .Release.Name }} <REVISION> --namespace {{ .Values.namespace }}
+
+===========================================================================

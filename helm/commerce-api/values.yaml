@@ -1,0 +1,227 @@
+# =============================================================================
+# commerce-api — Base Values
+# =============================================================================
+# This file defines ALL valid configuration keys with their defaults.
+# Environment-specific overrides (values-dev/stage/prod.yaml) only need to
+# declare keys that differ from these defaults.
+# Keys not present here will not be rendered by any template.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Replica count
+# The HPA will override this at runtime if hpa.enabled is true.
+# Set this to hpa.minReplicas to avoid transient scale-down on helm upgrade.
+# ---------------------------------------------------------------------------
+replicaCount: 2
+
+# ---------------------------------------------------------------------------
+# Container image
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/your-org/commerce-api
+  # tag defaults to the chart's appVersion if left empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+# - name: ghcr-pull-secret
+
+# ---------------------------------------------------------------------------
+# Release naming
+# Override nameOverride to change the base name used in resource names.
+# Override fullnameOverride to take complete control of resource naming.
+# ---------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Namespace
+# The namespace must exist or be created with --create-namespace at deploy time.
+# ---------------------------------------------------------------------------
+namespace: commerce
+
+# ---------------------------------------------------------------------------
+# ServiceAccount
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  # If create is false, provide the name of an existing ServiceAccount
+  name: ""
+  automountServiceAccountToken: false
+  annotations: {}
+  # eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/commerce-api-role
+
+# ---------------------------------------------------------------------------
+# Pod-level metadata
+# These annotations and labels are applied to the Pod spec (not the Deployment).
+# Use for Prometheus scrape config, Datadog tags, PodDisruptionBudget selectors, etc.
+# ---------------------------------------------------------------------------
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podLabels: {}
+
+# ---------------------------------------------------------------------------
+# Pod security context (applies to all containers in the pod)
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# Container security context
+# ---------------------------------------------------------------------------
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  protocol: TCP
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  hosts:
+    - host: commerce-api.your-org.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: commerce-api-tls
+  #   hosts:
+  #     - commerce-api.your-org.com
+
+# ---------------------------------------------------------------------------
+# Container ports
+# ---------------------------------------------------------------------------
+containerPort: 8080
+
+# ---------------------------------------------------------------------------
+# Resource requests and limits
+# These defaults are intentionally conservative.
+# Production values are set in values-prod.yaml.
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Liveness and readiness probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Horizontal Pod Autoscaler
+# ---------------------------------------------------------------------------
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ---------------------------------------------------------------------------
+# Update strategy
+# ---------------------------------------------------------------------------
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# ---------------------------------------------------------------------------
+# Application environment variables
+# These are injected into the container at runtime via a ConfigMap.
+# Do NOT put secrets here — use the secret block below.
+# ---------------------------------------------------------------------------
+config:
+  APP_ENV: "production"
+  APP_PORT: "8080"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  METRICS_ENABLED: "true"
+  CACHE_TTL_SECONDS: "300"
+  MAX_CONNECTIONS: "100"
+  REQUEST_TIMEOUT_MS: "5000"
+  CORS_ALLOWED_ORIGINS: "https://your-org.com"
+
+# ---------------------------------------------------------------------------
+# Secrets
+# Values here are base64-encoded at template render time.
+# For production, replace this block with an External Secrets Operator
+# or Sealed Secrets reference — never commit real credentials here.
+# ---------------------------------------------------------------------------
+secret:
+  DATABASE_URL: "cG9zdGdyZXNxbDovL2xvY2FsaG9zdDo1NDMyL2NvbW1lcmNl"
+  API_KEY: "Y2hhbmdlbWUtaW4tcHJvZHVjdGlvbg=="
+  JWT_SECRET: "Y2hhbmdlbWUtaW4tcHJvZHVjdGlvbg=="
+
+# ---------------------------------------------------------------------------
+# Node scheduling
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+# Example: prefer spreading pods across zones
+# podAntiAffinity:
+#   preferredDuringSchedulingIgnoredDuringExecution:
+#     - weight: 100
+#       podAffinityTerm:
+#         labelSelector:
+#           matchLabels:
+#             app.kubernetes.io/name: commerce-api
+#         topologyKey: topology.kubernetes.io/zone
+
+# ---------------------------------------------------------------------------
+# Additional labels applied to ALL resources created by this chart
+# ---------------------------------------------------------------------------
+commonLabels:
+  app.kubernetes.io/part-of: commerce-platform
+  app.kubernetes.io/managed-by: helm
+  team: platform-engineering

@@ -1,0 +1,352 @@
+# =============================================================================
+# KubeRelease Platform — CI/CD Pipeline
+# =============================================================================
+# Deploys the commerce-api Helm chart to dev, staging, and production in
+# sequential order. Each environment must succeed before promotion continues.
+#
+# Required GitHub Actions secrets:
+#   KUBECONFIG_DEV       — base64-encoded kubeconfig for the dev cluster
+#   KUBECONFIG_STAGE     — base64-encoded kubeconfig for the staging cluster
+#   KUBECONFIG_PROD      — base64-encoded kubeconfig for the production cluster
+#   GHCR_TOKEN           — GitHub Container Registry pull token (if private)
+# =============================================================================
+
+name: Deploy commerce-api
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Only trigger when chart files or application source change
+      - "helm/commerce-api/**"
+      - "applications/commerce-api/**"
+      - ".github/workflows/deploy-platform.yml"
+
+  # Allow manual deploys with environment targeting
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev | stage | prod | all)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+          - all
+
+# Prevent concurrent deploys to the same environment — a newer commit
+# cancels an in-progress run for the same branch.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HELM_VERSION: "3.14.0"
+  CHART_PATH: "./helm/commerce-api"
+  CHART_NAME: "commerce-api"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # lint-and-validate
+  # Run on every push. Catches chart errors before any cluster interaction.
+  # ---------------------------------------------------------------------------
+  lint-and-validate:
+    name: Lint and Validate Chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # Fetch full history so helm diff can compare against prior commits
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # Lint validates YAML syntax, required fields, and schema compliance.
+      # --strict promotes warnings to errors — required for CI gate behavior.
+      - name: Lint chart (base values)
+        run: |
+          helm lint ${{ env.CHART_PATH }} \
+            --strict \
+            --set image.tag=lint-check
+
+      # Lint each environment values file to catch environment-specific errors.
+      - name: Lint chart (dev values)
+        run: |
+          helm lint ${{ env.CHART_PATH }} \
+            --strict \
+            --values ${{ env.CHART_PATH }}/values-dev.yaml \
+            --set image.tag=dev
+
+      - name: Lint chart (stage values)
+        run: |
+          helm lint ${{ env.CHART_PATH }} \
+            --strict \
+            --values ${{ env.CHART_PATH }}/values-stage.yaml \
+            --set image.tag=stage
+
+      - name: Lint chart (prod values)
+        run: |
+          helm lint ${{ env.CHART_PATH }} \
+            --strict \
+            --values ${{ env.CHART_PATH }}/values-prod.yaml \
+            --set image.tag=latest
+
+      # Template rendering verifies that all Go template expressions are valid
+      # and that the rendered YAML is well-formed, without touching a cluster.
+      - name: Render templates (dev)
+        run: |
+          helm template ${{ env.CHART_NAME }}-dev ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-dev.yaml \
+            --namespace commerce-dev \
+            --debug \
+            > /dev/null
+
+      - name: Render templates (stage)
+        run: |
+          helm template ${{ env.CHART_NAME }}-stage ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-stage.yaml \
+            --namespace commerce-stage \
+            --debug \
+            > /dev/null
+
+      - name: Render templates (prod)
+        run: |
+          helm template ${{ env.CHART_NAME }}-prod ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-prod.yaml \
+            --namespace commerce-prod \
+            --debug \
+            > /dev/null
+
+      # Package the chart to verify the archive builds cleanly.
+      # The .tgz artifact is uploaded for use by downstream deploy jobs.
+      - name: Package chart
+        run: |
+          helm package ${{ env.CHART_PATH }} --destination /tmp/helm-packages/
+
+      - name: Upload chart package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart-package
+          path: /tmp/helm-packages/*.tgz
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # deploy-dev
+  # Deploys to the development cluster on every successful lint.
+  # Fast feedback loop — dev deploys do not require manual approval.
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: lint-and-validate
+    # Skip if a manual dispatch targeted a specific non-dev environment
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.environment == 'dev' ||
+      github.event.inputs.environment == 'all'
+    environment:
+      name: development
+      url: https://commerce-api.dev.your-org.internal
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # Write the cluster kubeconfig from the GitHub secret.
+      # The secret value is a base64-encoded kubeconfig file.
+      - name: Configure kubeconfig (dev cluster)
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_DEV }}" | base64 --decode > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      # Ensure the namespace exists before deploying.
+      # --dry-run=client prevents failure if namespace already exists.
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace commerce-dev --dry-run=client -o yaml | kubectl apply -f -
+
+      # Upgrade or install the release.
+      # --atomic rolls back automatically on failure.
+      # --timeout is generous for dev — image pulls may be slow on cold nodes.
+      - name: Deploy to development
+        run: |
+          helm upgrade --install ${{ env.CHART_NAME }}-dev ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-dev.yaml \
+            --namespace commerce-dev \
+            --atomic \
+            --timeout 8m \
+            --set image.tag=dev \
+            --set "podAnnotations.deploy-time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --description "Deployed from commit ${{ github.sha }} by ${{ github.actor }}"
+
+      - name: Verify rollout (dev)
+        run: |
+          kubectl rollout status deployment/${{ env.CHART_NAME }}-dev \
+            --namespace commerce-dev \
+            --timeout=5m
+
+      - name: Show release status (dev)
+        run: |
+          helm status ${{ env.CHART_NAME }}-dev --namespace commerce-dev
+          helm history ${{ env.CHART_NAME }}-dev --namespace commerce-dev
+
+  # ---------------------------------------------------------------------------
+  # deploy-stage
+  # Deploys to staging after dev succeeds.
+  # Requires manual approval via GitHub environment protection rules.
+  # ---------------------------------------------------------------------------
+  deploy-stage:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.environment == 'stage' ||
+      github.event.inputs.environment == 'all'
+    environment:
+      name: staging
+      url: https://commerce-api.stage.your-org.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Configure kubeconfig (stage cluster)
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_STAGE }}" | base64 --decode > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace commerce-stage --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy to staging
+        run: |
+          helm upgrade --install ${{ env.CHART_NAME }}-stage ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-stage.yaml \
+            --namespace commerce-stage \
+            --atomic \
+            --timeout 8m \
+            --set image.tag=stage \
+            --set "podAnnotations.deploy-time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --description "Deployed from commit ${{ github.sha }} by ${{ github.actor }}"
+
+      - name: Verify rollout (stage)
+        run: |
+          kubectl rollout status deployment/${{ env.CHART_NAME }}-stage \
+            --namespace commerce-stage \
+            --timeout=5m
+
+      - name: Show release status (stage)
+        run: |
+          helm status ${{ env.CHART_NAME }}-stage --namespace commerce-stage
+          helm history ${{ env.CHART_NAME }}-stage --namespace commerce-stage
+
+  # ---------------------------------------------------------------------------
+  # approval-prod
+  # Wait for human approval before deploying to production.
+  # ---------------------------------------------------------------------------
+  approval-prod:
+    name: Await production approval
+    runs-on: ubuntu-latest
+    needs: deploy-stage
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.environment == 'prod' ||
+      github.event.inputs.environment == 'all'
+    environment:
+      name: production
+    steps:
+      - name: Await approval
+        run: |
+          echo "Production deployment approval received. Proceeding to deploy-prod."
+
+  # ---------------------------------------------------------------------------
+  # deploy-prod
+  # Deploys to production after staging succeeds and approval is granted.
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: approval-prod
+    if: >
+      github.event_name == 'push' ||
+      github.event.inputs.environment == 'prod' ||
+      github.event.inputs.environment == 'all'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Configure kubeconfig (prod cluster)
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_PROD }}" | base64 --decode > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl create namespace commerce-prod --dry-run=client -o yaml | kubectl apply -f -
+
+      # Production deploy: --atomic ensures automatic rollback on failure.
+      # A shorter timeout than dev/stage is intentional — prod nodes should
+      # pull images quickly from the internal registry cache.
+      - name: Deploy to production
+        run: |
+          helm upgrade --install ${{ env.CHART_NAME }}-prod ${{ env.CHART_PATH }} \
+            --values ${{ env.CHART_PATH }}/values-prod.yaml \
+            --namespace commerce-prod \
+            --atomic \
+            --timeout 5m \
+            --set image.tag=latest \
+            --set "podAnnotations.deploy-time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --description "Deployed from commit ${{ github.sha }} by ${{ github.actor }}"
+
+      - name: Verify rollout (prod)
+        run: |
+          kubectl rollout status deployment/${{ env.CHART_NAME }}-prod \
+            --namespace commerce-prod \
+            --timeout=5m
+
+      - name: Show release status (prod)
+        run: |
+          helm status ${{ env.CHART_NAME }}-prod --namespace commerce-prod
+          helm history ${{ env.CHART_NAME }}-prod --namespace commerce-prod
+
+      # Post-deploy smoke test: verify the service responds on the ingress host.
+      # This does not replace integration tests — it confirms basic reachability.
+      - name: Smoke test (prod ingress)
+        run: |
+          echo "Waiting 10s for ingress to stabilize..."
+          sleep 10
+          HTTP_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+            --max-time 10 \
+            https://commerce-api.your-org.com/healthz || echo "000")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Smoke test failed — HTTP $HTTP_CODE from production ingress"
+            echo "Initiating rollback..."
+            helm rollback ${{ env.CHART_NAME }}-prod --namespace commerce-prod
+            exit 1
+          fi
+          echo "Smoke test passed — HTTP $HTTP_CODE"

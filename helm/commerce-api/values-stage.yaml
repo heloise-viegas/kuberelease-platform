@@ -1,0 +1,61 @@
+# =============================================================================
+# commerce-api — Staging Environment Overrides
+# =============================================================================
+# Staging mirrors production topology but at reduced scale.
+# Resource allocations are sized to catch OOM and performance regressions
+# before they reach production without incurring full production cost.
+# =============================================================================
+
+replicaCount: 2
+
+image:
+  tag: stage
+
+namespace: commerce-stage
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: commerce-api.stage.your-org.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: commerce-api-stage-tls
+      hosts:
+        - commerce-api.stage.your-org.com
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+config:
+  APP_ENV: "staging"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  METRICS_ENABLED: "true"
+  CACHE_TTL_SECONDS: "120"
+  MAX_CONNECTIONS: "50"
+  REQUEST_TIMEOUT_MS: "5000"
+  CORS_ALLOWED_ORIGINS: "https://stage.your-org.com"
+
+commonLabels:
+  app.kubernetes.io/part-of: commerce-platform
+  app.kubernetes.io/managed-by: helm
+  team: platform-engineering
+  environment: staging
