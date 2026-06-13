@@ -118,7 +118,7 @@ jobs:
 
       - name: Start Minikube
         run: |
-          sudo minikube start --driver=docker --memory=${{ env.MINIKUBE_MEMORY }} --cpus=${{ env.MINIKUBE_CPUS }}
+          minikube start --driver=docker --memory=${{ env.MINIKUBE_MEMORY }} --cpus=${{ env.MINIKUBE_CPUS }}
           minikube status
 
       - name: Enable required addons
